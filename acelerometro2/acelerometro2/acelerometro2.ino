@@ -1,10 +1,20 @@
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
 #include <Wire.h>
+#include <GFButton.h>
 
-#define ACEL_THRSHLD 6.0
+#define ACEL_THRSHLD 5.0
+#define TAM 20
 
 Adafruit_MPU6050 mpu;
+
+GFButton botao1(4);
+GFButton botao2(15); 
+
+int i = 0;
+char gesto[TAM];
+
+bool gravando = true;
 
 const int interruptPin = 33;
 
@@ -15,6 +25,31 @@ unsigned long instanteAnterior = 0;
 float x_offset = 0;
 float y_offset = 0;
 float z_offset = 0;
+
+void btn1(GFButton &botao1){
+  Serial.println(">> BOTAO 1 PRESSIONADO <<");
+  if(gravando){
+    gesto[i] = '\0';
+    gravando = false;
+    i = 0;
+    for(int j = 0; gesto[j] != '\0'; j++){
+      Serial.print(gesto[j]); Serial.print(" ");
+    }
+    Serial.println("");
+  } 
+  else { gravando = true; }
+}
+
+void btn2(GFButton &botao2){
+  Serial.println(">> BOTAO 2 PRESSIONADO <<");
+}
+
+void gravacao(char mov){
+  if(gravando){
+    gesto[i] = mov;
+    i = (++i)%TAM;
+  }
+}
 
 void setup(void) {
   Serial.begin(115200);
@@ -40,11 +75,16 @@ void setup(void) {
   mpu.setInterruptPinPolarity(true);
   mpu.setMotionInterrupt(true);
 
+  botao1.setPressHandler(btn1);
+  botao2.setPressHandler(btn2);
+
   Serial.println("");
   delay(100);
 }
 
 void loop() {
+  botao1.process();
+  botao2.process();
   // sensors_event_t a, g, temp;
   // mpu.getEvent(&a, &g, &temp);
   // a.acceleration.x -= x_offset;
@@ -90,12 +130,14 @@ void loop() {
       Serial.print(z); Serial.print("\t");
       Serial.println("frente");
       Serial.println("----------------------------");
+      gravacao('f');
     } else if (x <= -ACEL_THRSHLD && maior == 'x'){
       Serial.println("----------------------------");
       Serial.print(x); Serial.print("\t");
       Serial.print(y); Serial.print("\t");
       Serial.print(z); Serial.print("\t");
       Serial.println("tras");
+      gravacao('t');
       Serial.println("----------------------------");
     } else if (z <= -ACEL_THRSHLD && maior == 'z'){
       Serial.println("----------------------------");
@@ -103,6 +145,7 @@ void loop() {
       Serial.print(y); Serial.print("\t");
       Serial.print(z); Serial.print("\t");
       Serial.println("cima");
+      gravacao('c');
       Serial.println("----------------------------");
     } else if (z >= ACEL_THRSHLD && maior == 'z'){
       Serial.println("----------------------------");
@@ -110,6 +153,7 @@ void loop() {
       Serial.print(y); Serial.print("\t");
       Serial.print(z); Serial.print("\t");
       Serial.println("baixo");
+      gravacao('b');
       Serial.println("----------------------------");
     } else if (y <= -ACEL_THRSHLD && maior == 'y'){
       Serial.println("----------------------------");
@@ -117,6 +161,7 @@ void loop() {
       Serial.print(y); Serial.print("\t");
       Serial.print(z); Serial.print("\t");
       Serial.println("direita");
+      gravacao('d');
       Serial.println("----------------------------");
     } else if (y >= ACEL_THRSHLD && maior == 'y'){
       Serial.println("----------------------------");
@@ -124,11 +169,16 @@ void loop() {
       Serial.print(y); Serial.print("\t");
       Serial.print(z); Serial.print("\t");
       Serial.println("esquerda");
+      gravacao('e');
       Serial.println("----------------------------");
     } 
+  // reseta os valores do acelerometro
+  x_offset = a.acceleration.x;
+  y_offset = a.acceleration.y;
+  z_offset = a.acceleration.z;
   }
 
-  else if (millis() - instanteAnterior > 2000) {
+  else if (millis() - instanteAnterior > 500) {
     motionLast20seg = false;
     instanteAnterior = millis();
  }
@@ -140,6 +190,7 @@ void loop() {
   y_offset = a.acceleration.y;
   z_offset = a.acceleration.z;
  }
+
 
   delay(10);
 }
