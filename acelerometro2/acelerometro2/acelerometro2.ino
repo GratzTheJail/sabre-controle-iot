@@ -3,6 +3,8 @@
 #include <string.h>
 #include <Wire.h>
 #include <GFButton.h>
+#include <ArduinoJson.h>
+#include <SD.h>
 
 #define GYRO_THRSHLD 0.5
 #define TAM_GRAVACAO 20
@@ -15,13 +17,13 @@ Adafruit_MPU6050 mpu;
 const int MPU_INT_PIN = 4;
 
 GFButton botao1(4);
-GFButton botao2(15); 
+GFButton botao2(15);
 
 int i = 0; // iterador gravação do gesto
 char gesto[TAM_GRAVACAO] = "yyyyyyy";
 
 int j = 0; // iterador gesto atual
-char gestoAtual[TAM_GERAL] = "xxxxxxxx";
+char gestoEmMovimento[TAM_GERAL] = "xxxxxxxx";
 
 bool gravando = true;
 bool movimentando = true;
@@ -71,11 +73,11 @@ void btn2(GFButton &botao2){
   if(movimentando){
     movimentando = false;
     Serial.println(gesto);
-    Serial.println(gestoAtual);
+    Serial.println(gestoEmMovimento);
   } else{ 
     movimentando = true; 
     j = 0;
-    strcpy(gestoAtual, "xxxxx");
+    strcpy(gestoEmMovimento, "xxxxx");
   }
 }
 
@@ -85,10 +87,10 @@ void movimento(char mov){
     // gesto[i] = mov;
     strcpy(&gesto[i], movimento);
     i = (++i)%(TAM_GRAVACAO - 1);
-    strcpy(gestoAtual, "xxxxx");
+    strcpy(gestoEmMovimento, "xxxxx");
   }
   if(!gravando && movimentando){
-    strcpy(&gestoAtual[j], movimento);
+    strcpy(&gestoEmMovimento[j], movimento);
     j = (++j)%(TAM_GERAL - 1);
   }
 }
@@ -126,21 +128,37 @@ void setup(void) {
 
   Serial.println("");
   const int CALIB_SAMPLES = 500;
-float gx_calib = 0, gy_calib = 0, gz_calib = 0;
+  float gx_calib = 0, gy_calib = 0, gz_calib = 0;
 
-for(int i=0; i<CALIB_SAMPLES; i++) {
-    sensors_event_t a, g, temp;
-    mpu.getEvent(&a, &g, &temp);
-    gx_calib += g.gyro.x;
-    gy_calib += g.gyro.y;
-    gz_calib += g.gyro.z;
-    delay(5);
-}
+  for(int i=0; i<CALIB_SAMPLES; i++) {
+      sensors_event_t a, g, temp;
+      mpu.getEvent(&a, &g, &temp);
+      gx_calib += g.gyro.x;
+      gy_calib += g.gyro.y;
+      gz_calib += g.gyro.z;
+      delay(5);
+  }
 
-gx_calib /= CALIB_SAMPLES;
-gy_calib /= CALIB_SAMPLES;
-gz_calib /= CALIB_SAMPLES;
+  gx_calib /= CALIB_SAMPLES;
+  gy_calib /= CALIB_SAMPLES;
+  gz_calib /= CALIB_SAMPLES;
 
+  // leitura do arquivo JSON
+  if (!SD.begin()) {
+    Serial.println("SD init failed!");
+    return;
+  }
+
+  File file = SD.open("/gestos.json");
+  if (!file) {
+    Serial.println("Failed to open json file");
+    return;
+  }
+
+  DynamicJsonDocument doc(2048);
+  deserializeJson(doc, file);
+  file.close();
+  // LIDO E SALVO EM DOC
 }
 
 void loop() {
@@ -309,13 +327,13 @@ void loop() {
 //  }
 
  if(!gravando && movimentando){
-  if(strstr(gestoAtual, gesto) != NULL){
+  if(strstr(gestoEmMovimento, gesto) != NULL){
     Serial.println("=================");
     Serial.println("GESTO 1");
     Serial.print(gesto);
-    Serial.println(gestoAtual);
+    Serial.println(gestoEmMovimento);
     Serial.println("=================");
-    strcpy(gestoAtual, "xxxxx");
+    strcpy(gestoEmMovimento, "xxxxx");
   }
  }
 
