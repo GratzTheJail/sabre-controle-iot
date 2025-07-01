@@ -3,83 +3,111 @@
 #include <string.h>
 #include <Wire.h>
 #include <GFButton.h>
+#include <WiFi.h>
+#include <AsyncMqttClient.h>
 #include <ArduinoJson.h>
- 
+#include <EEPROM.h> 
+
+// definições para movimento
 #define GYRO_THRSHLD 0.5
 #define TAM_GRAVACAO 20
 #define TAM_GERAL (15 * TAM_GRAVACAO)
 #define PAUSA_MOV 300
 #define E 0.1 // = sqrt(0.1*0.1*3)
 
+#define EEPROM_SIZE 1028
 
+// definições hardware
 Adafruit_MPU6050 mpu;
 const int MPU_INT_PIN = 4;
-
+const int interruptPin = 33;
 GFButton botao1(4);
 GFButton botao2(15);
 
+// controle de gesto
 int i = 0; // iterador gravação do gesto
 char gesto[TAM_GRAVACAO] = "yyyyyyy";
-// TESTANDO
+// gesto sendo feito
 int j = 0; // iterador gesto atual
 char gestoEmMovimento[TAM_GERAL] = "xxxxxxxx";
-
 bool gravando = true;
 bool movimentando = true;
 
-const int interruptPin = 33;
 
-
-bool motionLast20seg = false;
-
-unsigned long instanteAnterior = 0;
-unsigned long instAntGesto = 0;
-
-bool movimentoAtivo = false;
-unsigned long tempoUltimoMovimento = 0;
-unsigned long tempoDeMovimento = 0;
-unsigned long inicioMovimento = 0;
+// leituras MPU
 float x_media = 0, y_media = 0, z_media = 0;
 int soma = 0;
-
-float gx_calib;
-float gy_calib;
-float gz_calib;
-
+float gx_calib, gy_calib, gz_calib;
 float x_offset = 0;
 float y_offset = 0;
 float z_offset = 0;
 
-void btn1(GFButton &botao1){
-  Serial.println(">> BOTAO 1 PRESSIONADO <<");
+
+// controle de tempo
+bool motionLast20seg = false;
+unsigned long instanteAnterior = 0;
+unsigned long instAntGesto = 0;
+bool movimentoAtivo = false;
+unsigned long tempoUltimoMovimento = 0;
+unsigned long tempoDeMovimento = 0;
+unsigned long inicioMovimento = 0;
+
+
+// Wi-Fi credentials
+const char* WIFI_SSID     = "Projeto";
+const char* WIFI_PASSWORD = "2022-11-07";
+
+// MQTT
+AsyncMqttClient mqttClient;
+const char* MQTT_HOST          = "broker.mqtt.cool";
+const uint16_t MQTT_PORT       = 1883;
+const char* MQTT_CLIENT_ID     = "ESP32_Lightsaber";
+const char* MQTT_LOGIN         = "mqttuser";
+const char* MQTT_PASSWORD      = "1234";
+const char* MQTT_TOPIC_GESTURE = "esp32/saber/gesture";
+const char* MQTT_TOPIC_RECEIVED= "esp32/saber/gesture_recieved";
+StaticJsonDocument<1024> doc;
+
+void gravacao_de_gesto(){
   if(gravando){ // para de gravar
     gravando = false;
     for(int K = 0; gesto[K] != '\0'; K++){
       Serial.print(gesto[K]); Serial.print(" ");
     }
     Serial.println("");
+    // TODO: dar um publish numa mensagem no MQTT com o novo gesto! :)
   } 
   else { // começa a gravar
     gravando = true; 
     i = 0;
     strcpy(gesto, "yyyyy");
-
   }
 }
+// inicio/fim de gravação de gesto
+void btn1(GFButton &botao1){
+  Serial.println(">> BOTAO 1 PRESSIONADO <<");
+  gravacao_de_gesto();
+}
 
-void btn2(GFButton &botao2){
-  Serial.println(">> BOTAO 2 PRESSIONADO <<");
-  if(movimentando){
+
+// inicio/fim de leitura do movimento atual para comparação com gesto
+void leitura_mov(){
+  if(movimentando){ // fim do movimento
     movimentando = false;
     Serial.println(gesto);
     Serial.println(gestoEmMovimento);
-  } else{ 
+    // test example
+    publish_event(MQTT_TOPIC_GESTURE, "gesture-kitchen-lights");
+  } else{ // inicio do movimento
     movimentando = true; 
     j = 0;
     strcpy(gestoEmMovimento, "xxxxx");
   }
 }
-
+void btn2(GFButton &botao2){
+  Serial.println(">> BOTAO 2 PRESSIONADO <<");
+  leitura_mov();
+}
 void movimento(char mov){
   char movimento[2] = {mov, '\0'};
   if(gravando){
@@ -94,17 +122,109 @@ void movimento(char mov){
   }
 }
 
+
+// AUXILIARES EEPROM
+void saveDocToEEPROM(){
+  char json[1024];
+  uint32_t len = serializeJson(doc, json);
+  
+  // escreve tamanho antes da propria string
+  EEPROM.put(0, len);
+
+  // escreve json transformado em string
+  for(int i = 0; i < len; i++){
+    EEPROM.put(sizeof(len) + i, json[i]);
+  }
+  
+  EEPROM.commit();
+}
+
+void loadDocFromEEPROM(){
+  uint32_t len;
+  
+  EEPROM.get(0, len);
+
+  if(len >= 1024 || len <= 0){
+    Serial.println("Tamanho lido da EEPROM incorreto");
+    return;
+  }
+
+  char json[1024];
+  for(int i = 0; i < len; i++){
+    EEPROM.get(sizeof(len) + i, json[i]);
+  }
+  json[len] = '\0';
+
+  // transforma string em jsonDoc
+  DeserializationError error = deserializeJson(doc, json);
+  if (error) {
+    Serial.println("Falha ao ler da EEPROM");
+    return;
+  }
+}
+
+
+
+// WIFI EVENTS
+void on_wifi_connected(WiFiEvent_t, WiFiEventInfo_t) {
+  Serial.println("[DEBUG] WiFi connected");
+
+  mqttClient.connect();
+}
+void on_wifi_disconnected(WiFiEvent_t, WiFiEventInfo_t) {
+  Serial.println("[DEBUG] WiFi disconnected, retrying..");
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+}
+
+// MQTT EVENTS
+void on_mqtt_connected(bool sessionPresent) {
+  Serial.println("[DEBUG] MQTT connected");
+  uint16_t packetIdSub = mqttClient.subscribe("esp32/saber/gesture_recieved", 2);
+}
+void on_mqtt_disconnected(AsyncMqttClientDisconnectReason reason) {
+  Serial.print("[DEBUG] MQTT disconnected, retrying..");
+  mqttClient.connect();
+}
+// max evt 64 chars!
+void publish_event(const char* topic, const char* evt) {
+  char buf[64];
+  snprintf(buf, sizeof(buf), "{\"event\":\"%s\",\"ts\":%lu}", evt, millis());
+  mqttClient.publish(topic, 1, false, buf);
+}
+void on_mqtt_message(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total) {
+  payload[len] = '\0';
+  Serial.println("[DEBUG] Message recieved!");
+  // Desserializar a string do MQTT em JSON na variavel global doc para fazer o test dos gestos
+  StaticJsonDocument<1024> docTemp;
+  docTemp = doc;
+  DeserializationError error = deserializeJson(doc, payload);
+
+// checa erro
+  if (error) {
+    Serial.print("Erro ao desserializar JSON: ");
+    Serial.println(error.c_str());
+    doc = docTemp;
+    return;
+  }
+  if (!doc.is<JsonArray>()) {
+    Serial.println("O JSON não é um array!");
+  }
+
+// escreve na EEPROM
+  saveDocToEEPROM();
+}
+
+
+
 void setup(void) {
+  // inicia Serial e MPU
   Serial.begin(115200);
   Wire.begin(21, 22);
   while (!Serial)
     delay(10); // will pause Zero, Leonardo, etc until serial console opens
-
   Serial.println("Adafruit MPU6050 test!");
-
-  // Try to initialize!
-  // if (!mpu.begin()) {
-  if (!mpu.begin()) {
+  if (!mpu.begin()) { // Try to initialize!
     Serial.println("Failed to find MPU6050 chip");
     while (1) {
       delay(10);
@@ -112,6 +232,9 @@ void setup(void) {
   }
   Serial.println("MPU6050 Found!");
 
+  EEPROM.begin(EEPROM_SIZE);
+
+  // configuração do MPU
   //setupt motion detection
   mpu.setHighPassFilter(MPU6050_HIGHPASS_0_63_HZ);
   mpu.setMotionDetectionThreshold(3.5);
@@ -120,15 +243,12 @@ void setup(void) {
   mpu.setInterruptPinPolarity(true);
   mpu.setMotionInterrupt(true);
 
-  botao1.setPressHandler(btn1);
-  // botao1.setReleaseHandler(btn1);
-  botao2.setPressHandler(btn2);
-  // botao2.setReleaseHandler(btn2);
 
+
+// calibração do MPU
   Serial.println("");
   const int CALIB_SAMPLES = 500;
   float gx_calib = 0, gy_calib = 0, gz_calib = 0;
-
   for(int i=0; i<CALIB_SAMPLES; i++) {
       sensors_event_t a, g, temp;
       mpu.getEvent(&a, &g, &temp);
@@ -137,27 +257,37 @@ void setup(void) {
       gz_calib += g.gyro.z;
       delay(5);
   }
-
   gx_calib /= CALIB_SAMPLES;
   gy_calib /= CALIB_SAMPLES;
   gz_calib /= CALIB_SAMPLES;
 
-  // leitura do arquivo JSON
-  if (!SD.begin()) {
-    Serial.println("SD init failed!");
-    return;
-  }
 
-  File file = SD.open("/gestos.json");
-  if (!file) {
-    Serial.println("Failed to open json file");
-    return;
-  }
 
-  DynamicJsonDocument doc(2048);
-  deserializeJson(doc, file);
-  file.close();
-  // LIDO E SALVO EM DOC
+  // carrega gestos da EEPROM
+  loadDocFromEEPROM();
+  Serial.println("[DEBUG] Gestos da sessao anterior carregados");
+
+  // configuração botoes
+  botao1.setPressHandler(btn1);
+  // botao1.setReleaseHandler(btn1);
+  botao2.setPressHandler(btn2);
+  // botao2.setReleaseHandler(btn2);
+
+
+  // mqtt
+  mqttClient.onConnect(on_mqtt_connected);
+  mqttClient.onDisconnect(on_mqtt_disconnected);
+  mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+  mqttClient.setCredentials(MQTT_LOGIN, MQTT_PASSWORD);
+  mqttClient.setClientId(MQTT_CLIENT_ID);
+  mqttClient.onMessage(on_mqtt_message);
+  
+
+  // wifi
+  WiFi.onEvent(on_wifi_connected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
+  WiFi.onEvent(on_wifi_disconnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+  // connect to wifi, which will then connect to mqtt
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 }
 
 void loop() {
@@ -176,19 +306,11 @@ void loop() {
   y = g.gyro.y - gy_calib;
   z = g.gyro.z - gz_calib;
 
-  // Serial.println("--------------------");
-  // Serial.print(x);
-  // Serial.print(",\tY: ");
-  // Serial.print(y);
-  // Serial.print(",\tZ: ");
-  // Serial.print(z);
-  // Serial.println("\to/s");
-  // delay(30);
-
 // TODO : TESTAR COM ACELEROMETRO + GIROSCOPIO
 
   float magnitude = sqrt( x*x + y*y + z*z );
 
+// INICIO DO MOVIMENTO
   if(!movimentoAtivo && magnitude > GYRO_THRSHLD){
         movimentoAtivo = true;
         inicioMovimento = millis();
@@ -196,10 +318,8 @@ void loop() {
         y_media = 0;
         z_media = 0;
         soma = 0;
-        // Serial.println("Comecou o movimento");
-  }
+  } // DURANTE O MOVIMENTO
   if(movimentoAtivo && magnitude > E) {
-      // Serial.println("Esta rolando o movimento");
     x_media += x;
     y_media += y;
     z_media += z;
@@ -208,9 +328,8 @@ void loop() {
 
 // TODO : RETESTAR COM ACELEROMETRO COM SOMA++ Q TAVA FALTANDO
 
-  // termino de movimento (acelerometro prox de zero)
+  // TERMINOU O MOVIMENTO (giroscopio prox de zero)
   if(magnitude < E && movimentoAtivo && (millis() - inicioMovimento > PAUSA_MOV)){
-    // Serial.println("TERMINOU O MOVIMENTO");
     movimentoAtivo = false;
 
     x_media = x_media / (float)soma;
@@ -260,6 +379,27 @@ void loop() {
     movimentoAtivo = false;
   }
 
+// VERIFICA SE MOVIMENTO ATUAL É ALGUM GESTO DO JSON RECEBIDO
+ if(!gravando && movimentando && doc.is<JsonArray>()){
+  JsonArray array = doc.as<JsonArray>();
+  for (int i = 0; i < array.size(); i++) {
+    if (array[i].is<const char*>()){
+      const char* item = array[i].as<const char*>();
+      strcpy(gesto, item);
+      if(strstr(gestoEmMovimento, gesto) != NULL){
+        Serial.println("=================");
+        Serial.print("GESTO "); Serial.println(i);
+        Serial.print(gesto);
+        Serial.println(gestoEmMovimento);
+        Serial.println("=================");
+        strcpy(gestoEmMovimento, "xxxxx");
+        leitura_mov();
+      }
+    }
+  }
+ }
+
+// PARTE DEIXADA DE LADO -- ACELEROMETRO
   // if(mpu.getMotionInterruptStatus() /*&& millis() - instAntGesto > PAUSA_MOV*/) {
   //   motionLast20seg = true;
   //   instanteAnterior = millis();
@@ -312,10 +452,10 @@ void loop() {
   // z_offset = a.acceleration.z;
   // }
 
-  else if (millis() - instanteAnterior > 700) {
-    motionLast20seg = false;
-    instanteAnterior = millis();
- }
+//   else if (millis() - instanteAnterior > 700) {
+//     motionLast20seg = false;
+//     instanteAnterior = millis();
+//  }
 
 //  if(!motionLast20seg){
 //   sensors_event_t a, g, temp;
@@ -324,16 +464,5 @@ void loop() {
 //   y_offset = a.acceleration.y;
 //   z_offset = a.acceleration.z;
 //  }
-
- if(!gravando && movimentando){
-  if(strstr(gestoEmMovimento, gesto) != NULL){
-    Serial.println("=================");
-    Serial.println("GESTO 1");
-    Serial.print(gesto);
-    Serial.println(gestoEmMovimento);
-    Serial.println("=================");
-    strcpy(gestoEmMovimento, "xxxxx");
-  }
- }
 
 }
