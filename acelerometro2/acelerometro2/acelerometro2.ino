@@ -4,8 +4,7 @@
 #include <Wire.h>
 #include <GFButton.h>
 #include <ArduinoJson.h>
-#include <SD.h>
-
+ 
 #define GYRO_THRSHLD 0.5
 #define TAM_GRAVACAO 20
 #define TAM_GERAL (15 * TAM_GRAVACAO)
@@ -21,7 +20,7 @@ GFButton botao2(15);
 
 int i = 0; // iterador gravação do gesto
 char gesto[TAM_GRAVACAO] = "yyyyyyy";
-
+// TESTANDO
 int j = 0; // iterador gesto atual
 char gestoEmMovimento[TAM_GERAL] = "xxxxxxxx";
 
