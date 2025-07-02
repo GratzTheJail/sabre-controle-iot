@@ -66,6 +66,7 @@ const char* MQTT_LOGIN         = "mqttuser";
 const char* MQTT_PASSWORD      = "1234";
 const char* MQTT_TOPIC_GESTURE = "sabre/comando";
 const char* MQTT_TOPIC_RECEIVED= "sabre/comando/gesto";
+const char* MQTT_TOPIC_SENDDONE= "sabre/comando/feito";
 StaticJsonDocument<1024> doc;
 
 void gravacao_de_gesto(){
@@ -75,18 +76,20 @@ void gravacao_de_gesto(){
       Serial.print(gesto[K]); Serial.print(" ");
     }
     Serial.println("");
-    // TODO: dar um publish numa mensagem no MQTT com o novo gesto! :)
+    // Da um publish numa mensagem no MQTT com o novo gesto! :)
     // formato de envio (json): ["D","F",...]
     if(strlen(gesto) > 0 && gesto[0] != 'y'){
       char gestoEnvio[TAM_GERAL];
       gestoEnvio[0] = '[';
-      for(int i = 0; gesto[i] != '\0'; i++){
+      int j = 2;
+      for(int i = 0; gesto[i] != '\0' && j + 5 < TAM_GERAL; i++){
         strncat(gestoEnvio, "\"", 2);
         char temp[2];
         temp[0] = gesto[i] - ('a' - 'A');
         temp[1] = '\0';
         strncat(gestoEnvio, temp, 3);
         strncat(gestoEnvio, "\",", 3);
+        j+=4;
       }
       for(int i = 0; gestoEnvio[i] != '\0'; i++)
         if(gestoEnvio[i+1] == '\0')
@@ -213,6 +216,7 @@ void publish_event(const char* topic, const char* evt) {
 void on_mqtt_message(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total) {
   payload[len] = '\0';
   Serial.println("[DEBUG] Message recieved!");
+  Serial.println(payload);
   // Desserializar a string do MQTT em JSON na variavel global doc para fazer o test dos gestos
   StaticJsonDocument<1024> docTemp;
   docTemp = doc;
@@ -226,6 +230,7 @@ void on_mqtt_message(char* topic, char* payload, AsyncMqttClientMessagePropertie
     return;
   }
   if (!doc.is<JsonArray>()) {
+    doc = docTemp;
     Serial.println("O JSON não é um array!");
   }
 
@@ -407,8 +412,14 @@ void loop() {
       if(strstr(gestoEmMovimento, gesto) != NULL){
         Serial.println("=================");
         Serial.print("GESTO "); Serial.println(i);
-        Serial.print(gesto);
-        Serial.println(gestoEmMovimento);
+        char json_envio[TAM_GRAVACAO + 5];
+        json_envio[0] = '[';
+        json_envio[1] = '\"';
+        strncat(json_envio, gesto, TAM_GRAVACAO);
+        strncat(json_envio, "\"]", 3);
+        Serial.println(json_envio);
+        publish_event(MQTT_TOPIC_SENDDONE, json_envio);
+        Serial.println("[DEBUG] Gesto enviado por MQTT ");
         Serial.println("=================");
         strcpy(gestoEmMovimento, "xxxxx");
         leitura_mov();
