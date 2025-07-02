@@ -59,13 +59,13 @@ const char* WIFI_PASSWORD = "2022-11-07";
 
 // MQTT
 AsyncMqttClient mqttClient;
-const char* MQTT_HOST          = "broker.mqtt.cool";
+const char* MQTT_HOST          = "192.168.0.111";
 const uint16_t MQTT_PORT       = 1883;
 const char* MQTT_CLIENT_ID     = "ESP32_Lightsaber";
 const char* MQTT_LOGIN         = "mqttuser";
 const char* MQTT_PASSWORD      = "1234";
-const char* MQTT_TOPIC_GESTURE = "esp32/saber/gesture";
-const char* MQTT_TOPIC_RECEIVED= "esp32/saber/gesture_recieved";
+const char* MQTT_TOPIC_GESTURE = "sabre/comando";
+const char* MQTT_TOPIC_RECEIVED= "sabre/comando/gesto";
 StaticJsonDocument<1024> doc;
 
 void gravacao_de_gesto(){
@@ -76,6 +76,27 @@ void gravacao_de_gesto(){
     }
     Serial.println("");
     // TODO: dar um publish numa mensagem no MQTT com o novo gesto! :)
+    // formato de envio (json): ["D","F",...]
+    if(strlen(gesto) > 0 && gesto[0] != 'y'){
+      char gestoEnvio[TAM_GERAL];
+      gestoEnvio[0] = '[';
+      for(int i = 0; gesto[i] != '\0'; i++){
+        strncat(gestoEnvio, "\"", 2);
+        char temp[2];
+        temp[0] = gesto[i] - ('a' - 'A');
+        temp[1] = '\0';
+        strncat(gestoEnvio, temp, 3);
+        strncat(gestoEnvio, "\",", 3);
+      }
+      for(int i = 0; gestoEnvio[i] != '\0'; i++)
+        if(gestoEnvio[i+1] == '\0')
+          gestoEnvio[i] = '\0';
+      strncat(gestoEnvio, "]", 2);
+      // test example
+      publish_event(MQTT_TOPIC_GESTURE, gestoEnvio);
+      Serial.println("Mensagem Enviada:");
+      Serial.println(gestoEnvio);
+    }
   } 
   else { // começa a gravar
     gravando = true; 
@@ -96,8 +117,6 @@ void leitura_mov(){
     movimentando = false;
     Serial.println(gesto);
     Serial.println(gestoEmMovimento);
-    // test example
-    publish_event(MQTT_TOPIC_GESTURE, "gesture-kitchen-lights");
   } else{ // inicio do movimento
     movimentando = true; 
     j = 0;
@@ -180,17 +199,16 @@ void on_wifi_disconnected(WiFiEvent_t, WiFiEventInfo_t) {
 // MQTT EVENTS
 void on_mqtt_connected(bool sessionPresent) {
   Serial.println("[DEBUG] MQTT connected");
-  uint16_t packetIdSub = mqttClient.subscribe("esp32/saber/gesture_recieved", 2);
+  uint16_t packetIdSub = mqttClient.subscribe(MQTT_TOPIC_RECEIVED, 2);
 }
 void on_mqtt_disconnected(AsyncMqttClientDisconnectReason reason) {
-  Serial.print("[DEBUG] MQTT disconnected, retrying..");
+  Serial.println("[DEBUG] MQTT disconnected, retrying..");
   mqttClient.connect();
 }
-// max evt 64 chars!
 void publish_event(const char* topic, const char* evt) {
-  char buf[64];
-  snprintf(buf, sizeof(buf), "{\"event\":\"%s\",\"ts\":%lu}", evt, millis());
-  mqttClient.publish(topic, 1, false, buf);
+  // char buf[64];
+  // snprintf(buf, sizeof(buf), "{\"event\":\"%s\",\"ts\":%lu}", evt, millis());
+  mqttClient.publish(topic, 2, false, evt);
 }
 void on_mqtt_message(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total) {
   payload[len] = '\0';
@@ -260,7 +278,7 @@ void setup(void) {
   gx_calib /= CALIB_SAMPLES;
   gy_calib /= CALIB_SAMPLES;
   gz_calib /= CALIB_SAMPLES;
-
+  Serial.println("[DEBUG] MPU inicializado e calibrado");
 
 
   // carrega gestos da EEPROM
